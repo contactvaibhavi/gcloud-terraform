@@ -28,7 +28,7 @@ Replace placeholders before `terraform apply`:
 | Placeholder | File |
 |-------------|------|
 | `YOUR_PROJECT_ID` | `main.tf` |
-| `<YOUR GCP PROJECT NAME>` | `ansible/vpc.tf` |
+| `<YOUR GCP PROJECT ID>` | `ansible/vpc.tf` |
 | `<YOUR HOME DIR>/.ssh/id_rsa` and `.pub` | `ansible/vpc.tf` |
 | `<YOUR ID on VM>` | `ansible/vpc.tf` |
 | `key.json` (service-account key path) | `ansible/vpc.tf` |
