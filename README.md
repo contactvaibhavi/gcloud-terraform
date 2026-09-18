@@ -17,7 +17,7 @@ This repository contains two independent lab tracks. Use **Track A** for a custo
 ## Prerequisites
 
 - GCP project with the Compute Engine API enabled
-- Authenticated `gcloud` CLI (or a service-account key for Track B)
+- Track A: Application Default Credentials for the Google provider — run `gcloud auth application-default login` (ordinary `gcloud auth login` alone is not enough for Terraform). Track B: service-account key at `ansible/key.json`, or equivalent ADC
 - Terraform ≥ 1.x
 - Python 3 and `pip`
 - Ansible (Track B only)
@@ -77,7 +77,7 @@ Local check (no GCP):
 
 ```bash
 pip install flask
-python app.py
+python3 app.py
 curl http://127.0.0.1:5000/
 ```
 
@@ -171,4 +171,3 @@ terraform destroy
 - Track B expects a service-account key at `ansible/key.json`.
 - Track A installs Flask on the VM but does not copy or start `app.py`. After apply, SSH in, deploy `app.py`, and run it before curling `Web-server-URL`.
 - Track A does not set `ssh-keys` metadata. Use `gcloud compute ssh flask-vm --zone=us-east4-a` (or configure OS Login / project keys) to reach the instance.
-)
