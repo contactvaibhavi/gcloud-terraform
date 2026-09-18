@@ -17,7 +17,7 @@ This repository contains two independent lab tracks. Use **Track A** for a custo
 ## Prerequisites
 
 - GCP project with the Compute Engine API enabled
-- Track A: Application Default Credentials for the Google provider — run `gcloud auth application-default login` (ordinary `gcloud auth login` alone is not enough for Terraform). Track B: service-account key at `ansible/key.json`, or equivalent ADC
+- Track A: Application Default Credentials for the Google provider — run `gcloud auth application-default login` (ordinary `gcloud auth login` alone is not enough for Terraform). Track B: service-account key at `ansible/key.json` (required by the current provider configuration)
 - Terraform ≥ 1.x
 - Python 3 and `pip`
 - Ansible (Track B only)
