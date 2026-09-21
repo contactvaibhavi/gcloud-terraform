@@ -2,7 +2,7 @@
 # End-to-end smoke test for Track B (ansible/vpc.tf + packages.yaml).
 #
 # Prerequisites:
-#   - gcloud, terraform, ansible-playbook, ansible
+#   - terraform, ansible-playbook, ssh, Python 3
 #   - ansible/key.json service-account key with Compute permissions
 #   - Real values for SSH_USER, SSH_PUBLIC_KEY, SSH_PRIVATE_KEY (or edit vpc.tf)
 #   - GCP_PROJECT
@@ -24,10 +24,8 @@ set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 ANSIBLE_SRC="$ROOT/ansible"
-ZONE="${ZONE:-us-east4-a}"
-INSTANCE="${INSTANCE:-example-instance}"
 WORKDIR=""
-APPLIED=0
+APPLY_ATTEMPTED=0
 
 die() { echo "ERROR: $*" >&2; exit 1; }
 log() { echo "==> $*"; }
@@ -54,13 +52,13 @@ macOS (Homebrew): brew tap hashicorp/tap && brew install hashicorp/tap/terraform
 
 cleanup() {
   local ec=$?
-  if [[ "$APPLIED" -eq 1 && "${SKIP_DESTROY:-0}" != "1" && -n "$WORKDIR" && -d "$WORKDIR" ]]; then
+  if [[ "$APPLY_ATTEMPTED" -eq 1 && "${SKIP_DESTROY:-0}" != "1" && -n "$WORKDIR" && -d "$WORKDIR" ]]; then
     log "destroying Track B resources in $WORKDIR"
-    (cd "$WORKDIR" && terraform destroy -auto-approve) || {
+    (cd "$WORKDIR" && terraform destroy -auto-approve -input=false) || {
       echo "WARNING: terraform destroy failed; check project ${GCP_PROJECT:-?}" >&2
       ec=1
     }
-  elif [[ "$APPLIED" -eq 1 && "${SKIP_DESTROY:-0}" == "1" ]]; then
+  elif [[ "$APPLY_ATTEMPTED" -eq 1 && "${SKIP_DESTROY:-0}" == "1" ]]; then
     echo "WARNING: SKIP_DESTROY=1; resources still running in $WORKDIR" >&2
   fi
   if [[ -n "$WORKDIR" && -d "$WORKDIR" && "${KEEP_WORKDIR:-0}" != "1" && "${SKIP_DESTROY:-0}" != "1" ]]; then
@@ -73,11 +71,11 @@ trap cleanup EXIT
 log "checking Terraform"
 require_terraform
 need_cmd ansible-playbook
-need_cmd gcloud
+need_cmd python3
+need_cmd ssh
 
-GCP_PROJECT="${GCP_PROJECT:-$(gcloud config get-value project 2>/dev/null || true)}"
-[[ -n "${GCP_PROJECT}" && "${GCP_PROJECT}" != "(unset)" ]] \
-  || die "set GCP_PROJECT"
+GCP_PROJECT="${GCP_PROJECT:-}"
+[[ -n "$GCP_PROJECT" ]] || die "set GCP_PROJECT"
 
 SSH_USER="${SSH_USER:-}"
 SSH_PUBLIC_KEY="${SSH_PUBLIC_KEY:-}"
@@ -89,30 +87,36 @@ SSH_PRIVATE_KEY="${SSH_PRIVATE_KEY:-}"
 KEY_JSON="${KEY_JSON:-$ANSIBLE_SRC/key.json}"
 [[ -f "$KEY_JSON" ]] || die "missing service-account key at $KEY_JSON (vpc.tf uses file(\"key.json\"))"
 
+# The script changes into a temporary directory; make user-supplied paths
+# absolute before passing them to Terraform, Ansible, and ssh.
+SSH_PUBLIC_KEY="$(python3 -c 'import os,sys; print(os.path.abspath(sys.argv[1]))' "$SSH_PUBLIC_KEY")"
+SSH_PRIVATE_KEY="$(python3 -c 'import os,sys; print(os.path.abspath(sys.argv[1]))' "$SSH_PRIVATE_KEY")"
+KEY_JSON="$(python3 -c 'import os,sys; print(os.path.abspath(sys.argv[1]))' "$KEY_JSON")"
+
 WORKDIR="$(mktemp -d "${TMPDIR:-/tmp}/gcloud-tf-verify-b.XXXXXX")"
 log "workdir $WORKDIR"
 cp "$ANSIBLE_SRC/vpc.tf" "$ANSIBLE_SRC/clusterinventory.tpl" "$ANSIBLE_SRC/packages.yaml" "$WORKDIR/"
 cp "$KEY_JSON" "$WORKDIR/key.json"
+chmod 600 "$WORKDIR/key.json"
 
-# Rewrite placeholder defaults to real values for this run only.
-python3 - "$WORKDIR/vpc.tf" "$GCP_PROJECT" "$SSH_PUBLIC_KEY" "$SSH_PRIVATE_KEY" "$SSH_USER" <<'PY'
+# Rewrite only the provider project. SSH variables are passed through TF_VAR_*
+# so paths and usernames do not need HCL string escaping.
+python3 - "$WORKDIR/vpc.tf" "$GCP_PROJECT" <<'PY'
 import pathlib, sys
 
 path = pathlib.Path(sys.argv[1])
-project, pub, priv, user = sys.argv[2], sys.argv[3], sys.argv[4], sys.argv[5]
+project = sys.argv[2]
 text = path.read_text()
-replacements = {
-    'default = "<YOUR HOME DIR>/.ssh/id_rsa.pub"': f'default = "{pub}"',
-    'default = "<YOUR HOME DIR>/.ssh/id_rsa"': f'default = "{priv}"',
-    'default = "<YOUR ID on VM>"': f'default = "{user}"',
-    'project    = "<YOUR GCP PROJECT NAME>"': f'project    = "{project}"',
-}
-for old, new in replacements.items():
-    if old not in text:
-        raise SystemExit(f"placeholder not found in vpc.tf: {old}")
-    text = text.replace(old, new, 1)
+placeholder = '<YOUR GCP PROJECT NAME>'
+if placeholder not in text:
+    raise SystemExit(f"project placeholder not found in vpc.tf: {placeholder}")
+text = text.replace(placeholder, project, 1)
 path.write_text(text)
 PY
+
+export TF_VAR_ssh_key="$SSH_PUBLIC_KEY"
+export TF_VAR_ssh_private_key="$SSH_PRIVATE_KEY"
+export TF_VAR_ssh_user="$SSH_USER"
 
 cd "$WORKDIR"
 log "terraform init"
@@ -120,8 +124,8 @@ terraform init -input=false
 log "terraform validate"
 terraform validate
 log "terraform apply"
+APPLY_ATTEMPTED=1
 terraform apply -auto-approve -input=false
-APPLIED=1
 
 [[ -f cluster.inventory ]] || die "cluster.inventory was not written"
 FIP="$(terraform output -raw instance_fip)"
@@ -130,20 +134,23 @@ log "instance_fip=$FIP"
 log "waiting for SSH on $FIP"
 ready=0
 for ((i = 1; i <= 40; i++)); do
-  if ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null \
+  if ssh -o BatchMode=yes -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null \
       -o ConnectTimeout=5 -i "$SSH_PRIVATE_KEY" "${SSH_USER}@${FIP}" true 2>/dev/null; then
     ready=1
     break
   fi
   sleep 5
 done
-[[ "$ready" -eq 1 ]] || die "SSH to $FIP never succeeded"
+[[ "$ready" -eq 1 ]] \
+  || die "SSH to $FIP never succeeded; Track B relies on the default VPC and an existing rule allowing TCP/22"
 
 log "ansible-playbook packages.yaml"
-ANSIBLE_HOST_KEY_CHECKING=False ansible-playbook -i cluster.inventory packages.yaml
+ANSIBLE_HOST_KEY_CHECKING=False ansible-playbook \
+  --private-key "$SSH_PRIVATE_KEY" \
+  -i cluster.inventory packages.yaml
 
 log "verifying packages on host"
-ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null \
+ssh -o BatchMode=yes -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null \
   -i "$SSH_PRIVATE_KEY" "${SSH_USER}@${FIP}" \
   'command -v wget && command -v iperf3 && command -v iperf'
 

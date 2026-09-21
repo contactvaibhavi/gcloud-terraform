@@ -30,7 +30,7 @@ INSTANCE="${INSTANCE:-flask-vm}"
 CURL_RETRIES="${CURL_RETRIES:-30}"
 SSH_RETRIES="${SSH_RETRIES:-40}"
 WORKDIR=""
-APPLIED=0
+APPLY_ATTEMPTED=0
 
 die() { echo "ERROR: $*" >&2; exit 1; }
 log() { echo "==> $*"; }
@@ -58,13 +58,13 @@ macOS (Homebrew): brew tap hashicorp/tap && brew install hashicorp/tap/terraform
 
 cleanup() {
   local ec=$?
-  if [[ "$APPLIED" -eq 1 && "${SKIP_DESTROY:-0}" != "1" && -n "$WORKDIR" && -d "$WORKDIR" ]]; then
+  if [[ "$APPLY_ATTEMPTED" -eq 1 && "${SKIP_DESTROY:-0}" != "1" && -n "$WORKDIR" && -d "$WORKDIR" ]]; then
     log "destroying Track A resources in $WORKDIR"
-    (cd "$WORKDIR" && terraform destroy -auto-approve) || {
+    (cd "$WORKDIR" && terraform destroy -auto-approve -input=false) || {
       echo "WARNING: terraform destroy failed; resources may still be running in project ${GCP_PROJECT:-?} zone $ZONE" >&2
       ec=1
     }
-  elif [[ "$APPLIED" -eq 1 && "${SKIP_DESTROY:-0}" == "1" ]]; then
+  elif [[ "$APPLY_ATTEMPTED" -eq 1 && "${SKIP_DESTROY:-0}" == "1" ]]; then
     echo "WARNING: SKIP_DESTROY=1 set; VM/network still running. Run terraform destroy in $WORKDIR" >&2
   fi
   if [[ -n "$WORKDIR" && -d "$WORKDIR" && "${KEEP_WORKDIR:-0}" != "1" && "${SKIP_DESTROY:-0}" != "1" ]]; then
@@ -93,10 +93,10 @@ gcloud auth print-access-token >/dev/null \
   || die "gcloud user auth missing; run: gcloud auth login"
 
 log "using project $GCP_PROJECT"
-gcloud config set project "$GCP_PROJECT" >/dev/null
 
-log "ensuring Compute Engine API is enabled"
-gcloud services enable compute.googleapis.com --project="$GCP_PROJECT" >/dev/null
+log "checking project, zone, and Compute Engine API access"
+gcloud compute zones describe "$ZONE" --project="$GCP_PROJECT" --quiet >/dev/null \
+  || die "cannot access Compute Engine in $GCP_PROJECT/$ZONE; check the project, API, IAM, billing, and quota"
 
 WORKDIR="$(mktemp -d "${TMPDIR:-/tmp}/gcloud-tf-verify.XXXXXX")"
 log "workdir $WORKDIR"
@@ -115,8 +115,8 @@ log "terraform validate"
 terraform validate
 
 log "terraform apply"
+APPLY_ATTEMPTED=1
 terraform apply -auto-approve -input=false
-APPLIED=1
 
 URL="$(terraform output -raw Web-server-URL)"
 [[ -n "$URL" ]] || die "empty Web-server-URL output"

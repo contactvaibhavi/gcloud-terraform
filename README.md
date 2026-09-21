@@ -169,7 +169,7 @@ terraform destroy
 - Python 3 and `pip` (local Flask checks)
 - Ansible (Track B only)
 - SSH keypair (Track B only)
-- `gcloud` CLI (verify scripts and SSH/SCP onto the root-stack VM)
+- `gcloud` CLI (root-stack verify script and SSH/SCP onto that VM)
 - Track B: service-account key at `ansible/key.json` (required by the current provider block)
 
 Ordinary `gcloud auth login` alone is not enough for the Google Terraform provider on the root stack — use Application Default Credentials (`gcloud auth application-default login`) as already noted under Prerequisites above.
@@ -218,6 +218,8 @@ export SSH_PRIVATE_KEY=$HOME/.ssh/id_rsa
 ```
 
 Checks Terraform first, then applies Track B, waits for SSH, runs `packages.yaml`, checks `wget` / `iperf` / `iperf3`, then destroys (unless `SKIP_DESTROY=1`).
+
+Track B uses GCP's `default` VPC but does not create an SSH firewall rule. Its live verification therefore also requires the default network and a rule allowing TCP/22 to the VM.
 
 ### Cost and safety
 
