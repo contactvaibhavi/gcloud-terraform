@@ -22,6 +22,7 @@ This repository contains two independent lab tracks. Use **Track A** for a custo
 - Python 3 and `pip`
 - Ansible (Track B only)
 - SSH keypair (Track B only)
+- `gcloud` CLI (required for the verify scripts and for SSH/SCP onto Track A)
 
 Replace placeholders before `terraform apply`:
 
@@ -102,6 +103,20 @@ curl "$(terraform output -raw Web-server-URL)"
 terraform destroy
 ```
 
+### Automated verify (Terraform + GCP)
+
+Requires **Terraform ≥ 1.x** on `PATH`, then GCP ADC / `gcloud` login, and a project with billing + Compute Engine enabled:
+
+```bash
+# install Terraform if needed, e.g. macOS:
+#   brew tap hashicorp/tap && brew install hashicorp/tap/terraform
+terraform version   # confirm >= 1.x
+export GCP_PROJECT=your-project-id
+./scripts/verify_track_a.sh
+```
+
+The script checks Terraform first (install + version), then GCP credentials. It copies `main.tf` into a temp dir (injects your project ID), runs `terraform init` / `validate` / `apply`, waits for SSH and the Flask package, SCPs and starts `app.py`, curls `Web-server-URL` for `Hello Cloud!`, then `terraform destroy` (unless `SKIP_DESTROY=1`).
+
 ---
 
 ## Track B — Terraform inventory + Ansible
@@ -130,6 +145,22 @@ ansible-playbook -i cluster.inventory packages.yaml
 ```bash
 terraform destroy
 ```
+
+### Automated verify (Terraform + GCP)
+
+Requires Terraform ≥ 1.x, Ansible, `ansible/key.json`, and SSH key env vars:
+
+```bash
+terraform version
+export GCP_PROJECT=your-project-id
+export SSH_USER=your_linux_username
+export SSH_PUBLIC_KEY=$HOME/.ssh/id_rsa.pub
+export SSH_PRIVATE_KEY=$HOME/.ssh/id_rsa
+# ansible/key.json must exist (service-account key)
+./scripts/verify_track_b.sh
+```
+
+Checks Terraform first, then applies Track B, waits for SSH, runs `packages.yaml`, checks `wget` / `iperf` / `iperf3`, then destroys (unless `SKIP_DESTROY=1`).
 
 ---
 
