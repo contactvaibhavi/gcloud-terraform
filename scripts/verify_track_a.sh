@@ -126,7 +126,7 @@ log "waiting for SSH to $INSTANCE ($ZONE)"
 ready=0
 for ((i = 1; i <= SSH_RETRIES; i++)); do
   if gcloud compute ssh "$INSTANCE" --zone="$ZONE" --project="$GCP_PROJECT" \
-      --command="true" --quiet 2>/dev/null; then
+      --strict-host-key-checking=yes --command="true" --quiet 2>/dev/null; then
     ready=1
     break
   fi
@@ -138,6 +138,7 @@ log "waiting for Flask package (startup script)"
 flask_ok=0
 for ((i = 1; i <= SSH_RETRIES; i++)); do
   if gcloud compute ssh "$INSTANCE" --zone="$ZONE" --project="$GCP_PROJECT" \
+      --strict-host-key-checking=yes \
       --command="python3 -c 'import flask'" --quiet 2>/dev/null; then
     flask_ok=1
     break
@@ -148,8 +149,10 @@ done
 
 log "deploying and starting app.py (not done by Terraform)"
 gcloud compute scp "$WORKDIR/app.py" "${INSTANCE}:~/app.py" \
-  --zone="$ZONE" --project="$GCP_PROJECT" --quiet
+  --zone="$ZONE" --project="$GCP_PROJECT" \
+  --strict-host-key-checking=yes --quiet
 gcloud compute ssh "$INSTANCE" --zone="$ZONE" --project="$GCP_PROJECT" --quiet \
+  --strict-host-key-checking=yes \
   --command='pkill -f "[p]ython3 app.py" 2>/dev/null || true; nohup python3 app.py >/tmp/flask-app.log 2>&1 &'
 
 log "curling $URL until Hello Cloud!"

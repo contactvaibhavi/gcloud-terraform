@@ -22,33 +22,26 @@ Security and local hygiene
    on disk. Prefer Application Default Credentials when possible; never
    commit the key.
 
-Image / packaging fragility
----------------------------
-6. Track A startup script runs pip install as root. On Debian images newer
-   than debian-11, PEP 668 / externally-managed-environment errors can
-   break the install. This lab pins debian-11 in main.tf.
-
 Cross-track inconsistency and redundancy
 ----------------------------------------
-7. Two divergent Terraform stacks. Root main.tf builds a custom VPC;
+6. Two divergent Terraform stacks. Root main.tf builds a custom VPC;
    ansible/vpc.tf uses the default network despite the filename. Machine
-   types and Debian majors also differ (f1-micro / debian-11 vs
-   n1-standard-1 / debian-10). Merging the tracks without redesign will
-   fail in confusing ways.
+   types also differ (f1-micro vs n1-standard-1). Merging the tracks
+   without redesign will fail in confusing ways.
 
-8. Dead commented network_interface block in ansible/vpc.tf duplicates the
+7. Dead commented network_interface block in ansible/vpc.tf duplicates the
    live block below it.
 
-9. ansible/clusterinventory.tpl receives server_private_ip from Terraform
+8. ansible/clusterinventory.tpl receives server_private_ip from Terraform
    but never references it; inventory SSH uses the public IP only.
 
-10. No shared pipeline: Ansible package install and the Flask app are not
+9. No shared pipeline: Ansible package install and the Flask app are not
     wired together. There is no single apply that yields a configured,
     listening HTTP endpoint.
 
-11. Root module has no required_providers / required_version; provider
+10. Root module has no required_providers / required_version; provider
     versions are unconstrained at the repo root.
 
-12. Generic resource names (default, example-*) collide cognitively with
+11. Generic resource names (default, example-*) collide cognitively with
     GCP's "default" network and make terraform state harder to read when
     experimenting with both tracks.

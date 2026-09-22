@@ -2,7 +2,7 @@
 # End-to-end smoke test for Track B (ansible/vpc.tf + packages.yaml).
 #
 # Prerequisites:
-#   - terraform, ansible-playbook, ssh, Python 3
+#   - gcloud, terraform, ansible-playbook, ssh, Python 3
 #   - ansible/key.json service-account key with Compute permissions
 #   - Real values for SSH_USER, SSH_PUBLIC_KEY, SSH_PRIVATE_KEY (or edit vpc.tf)
 #   - GCP_PROJECT
@@ -24,6 +24,8 @@ set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 ANSIBLE_SRC="$ROOT/ansible"
+ZONE="us-east4-a"
+INSTANCE="example-instance"
 WORKDIR=""
 APPLY_ATTEMPTED=0
 
@@ -71,6 +73,7 @@ trap cleanup EXIT
 log "checking Terraform"
 require_terraform
 need_cmd ansible-playbook
+need_cmd gcloud
 need_cmd python3
 need_cmd ssh
 
@@ -98,6 +101,12 @@ log "workdir $WORKDIR"
 cp "$ANSIBLE_SRC/vpc.tf" "$ANSIBLE_SRC/clusterinventory.tpl" "$ANSIBLE_SRC/packages.yaml" "$WORKDIR/"
 cp "$KEY_JSON" "$WORKDIR/key.json"
 chmod 600 "$WORKDIR/key.json"
+
+# Keep service-account authentication isolated from the user's gcloud config.
+export CLOUDSDK_CONFIG="$WORKDIR/gcloud"
+mkdir -m 700 "$CLOUDSDK_CONFIG"
+gcloud auth activate-service-account \
+  --key-file="$WORKDIR/key.json" --project="$GCP_PROJECT" --quiet >/dev/null
 
 # Rewrite only the provider project. SSH variables are passed through TF_VAR_*
 # so paths and usernames do not need HCL string escaping.
@@ -131,10 +140,47 @@ terraform apply -auto-approve -input=false
 FIP="$(terraform output -raw instance_fip)"
 log "instance_fip=$FIP"
 
+log "retrieving trusted SSH host keys through the Compute Engine API"
+HOST_KEYS_JSON="$WORKDIR/hostkeys.json"
+KNOWN_HOSTS="$WORKDIR/known_hosts"
+host_keys_ready=0
+for ((i = 1; i <= 40; i++)); do
+  if gcloud compute instances get-guest-attributes "$INSTANCE" \
+      --project="$GCP_PROJECT" --zone="$ZONE" --query-path='hostkeys/' \
+      --format=json >"$HOST_KEYS_JSON" 2>/dev/null \
+    && python3 - "$HOST_KEYS_JSON" "$FIP" >"$KNOWN_HOSTS.tmp" <<'PY'
+import json
+import sys
+
+entries = json.load(open(sys.argv[1], encoding="utf-8"))
+if isinstance(entries, dict):
+    entries = [entries]
+host = sys.argv[2]
+for entry in entries:
+    algorithm = entry.get("key", "")
+    key = entry.get("value", "")
+    if (algorithm.startswith("ssh-") or algorithm.startswith("ecdsa-")) and key:
+        print(f"{host} {algorithm} {key}")
+PY
+  then
+    if [[ -s "$KNOWN_HOSTS.tmp" ]]; then
+      mv "$KNOWN_HOSTS.tmp" "$KNOWN_HOSTS"
+      chmod 600 "$KNOWN_HOSTS"
+      host_keys_ready=1
+      break
+    fi
+  fi
+  rm -f "$KNOWN_HOSTS.tmp"
+  sleep 5
+done
+[[ "$host_keys_ready" -eq 1 ]] \
+  || die "VM did not publish SSH host keys through guest attributes"
+
 log "waiting for SSH on $FIP"
 ready=0
 for ((i = 1; i <= 40; i++)); do
-  if ssh -o BatchMode=yes -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null \
+  if ssh -o BatchMode=yes -o StrictHostKeyChecking=yes \
+      -o UserKnownHostsFile="$KNOWN_HOSTS" -o IdentitiesOnly=yes \
       -o ConnectTimeout=5 -i "$SSH_PRIVATE_KEY" "${SSH_USER}@${FIP}" true 2>/dev/null; then
     ready=1
     break
@@ -145,12 +191,14 @@ done
   || die "SSH to $FIP never succeeded; Track B relies on the default VPC and an existing rule allowing TCP/22"
 
 log "ansible-playbook packages.yaml"
-ANSIBLE_HOST_KEY_CHECKING=False ansible-playbook \
+ANSIBLE_HOST_KEY_CHECKING=True ansible-playbook \
   --private-key "$SSH_PRIVATE_KEY" \
+  --ssh-common-args "-o BatchMode=yes -o StrictHostKeyChecking=yes -o UserKnownHostsFile=$KNOWN_HOSTS -o IdentitiesOnly=yes" \
   -i cluster.inventory packages.yaml
 
 log "verifying packages on host"
-ssh -o BatchMode=yes -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null \
+ssh -o BatchMode=yes -o StrictHostKeyChecking=yes \
+  -o UserKnownHostsFile="$KNOWN_HOSTS" -o IdentitiesOnly=yes \
   -i "$SSH_PRIVATE_KEY" "${SSH_USER}@${FIP}" \
   'command -v wget && command -v iperf3 && command -v iperf'
 

@@ -95,6 +95,8 @@ python3 app.py
 
 The sections above cover the root Terraform + Flask path (`main.tf` / `app.py`). This repository also contains an independent Ansible track under `ansible/`. Do not mix resources from the two tracks unless you intentionally redesign the stack.
 
+> Compatibility update: both Terraform stacks now use supported Debian 12 images. The original overview above is preserved verbatim, so its Debian 11 reference is historical.
+
 ### Repository map
 
 | Path | Purpose |
@@ -114,13 +116,13 @@ The sections above cover the root Terraform + Flask path (`main.tf` / `app.py`).
 Root stack (main.tf) — documented above
   Terraform → custom VPC + subnet (10.0.1.0/24, us-east4)
            → firewall: TCP 22 (tag ssh), TCP 5000
-           → f1-micro VM (debian-11), startup: install Flask
+           → f1-micro VM (debian-12), startup: install Flask
            → output Web-server-URL = http://<EXTERNAL_IP>:5000
   You still must copy and run app.py on the VM.
 
 Track B (ansible/)
   Terraform → static external IP
-           → n1-standard-1 VM (debian-10) on default VPC
+           → n1-standard-1 VM (debian-12) on default VPC
            → SSH public key in instance metadata
            → write cluster.inventory
   Ansible  → apt install wget, iperf, iperf3
@@ -169,7 +171,7 @@ terraform destroy
 - Python 3 and `pip` (local Flask checks)
 - Ansible (Track B only)
 - SSH keypair (Track B only)
-- `gcloud` CLI (root-stack verify script and SSH/SCP onto that VM)
+- `gcloud` CLI (both verify scripts; SSH/SCP and trusted host-key retrieval)
 - Track B: service-account key at `ansible/key.json` (required by the current provider block)
 
 Ordinary `gcloud auth login` alone is not enough for the Google Terraform provider on the root stack — use Application Default Credentials (`gcloud auth application-default login`) as already noted under Prerequisites above.
@@ -203,7 +205,7 @@ export GCP_PROJECT=your-project-id
 ./scripts/verify_track_a.sh
 ```
 
-Checks Terraform first (install + version), then GCP credentials. Copies `main.tf` into a temp dir (injects your project ID), runs `terraform init` / `validate` / `apply`, waits for SSH and the Flask package, SCPs and starts `app.py`, curls `Web-server-URL` for `Hello Cloud!`, then `terraform destroy` (unless `SKIP_DESTROY=1`).
+Checks Terraform first (install + version), then GCP credentials. Copies `main.tf` into a temp dir (injects your project ID), runs `terraform init` / `validate` / `apply`, obtains the VM host key through authenticated guest attributes, waits for SSH and the Flask package, SCPs and starts `app.py`, curls `Web-server-URL` for `Hello Cloud!`, then `terraform destroy` (unless `SKIP_DESTROY=1`).
 
 **Track B:**
 
@@ -217,7 +219,7 @@ export SSH_PRIVATE_KEY=$HOME/.ssh/id_rsa
 ./scripts/verify_track_b.sh
 ```
 
-Checks Terraform first, then applies Track B, waits for SSH, runs `packages.yaml`, checks `wget` / `iperf` / `iperf3`, then destroys (unless `SKIP_DESTROY=1`).
+Checks Terraform first, then applies Track B, obtains the VM host keys from guest attributes through an isolated service-account-backed `gcloud` configuration, requires strict host-key checking for SSH and Ansible, runs `packages.yaml`, checks `wget` / `iperf` / `iperf3`, then destroys (unless `SKIP_DESTROY=1`).
 
 Track B uses GCP's `default` VPC but does not create an SSH firewall rule. Its live verification therefore also requires the default network and a rule allowing TCP/22 to the VM.
 
@@ -232,6 +234,6 @@ Track B uses GCP's `default` VPC but does not create an SSH firewall rule. Its l
 | Resource | Details |
 |----------|---------|
 | `google_compute_address` | `example-ip` |
-| `google_compute_instance` | `example-instance`, `n1-standard-1`, debian-10, default network |
+| `google_compute_instance` | `example-instance`, `n1-standard-1`, debian-12, default network |
 | `local_file` | `cluster.inventory` |
 | Outputs | `instance_ip`, `instance_fip` |
