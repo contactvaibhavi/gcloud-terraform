@@ -148,12 +148,21 @@ done
 [[ "$flask_ok" -eq 1 ]] || die "Flask never importable on VM (startup script may have failed)"
 
 log "deploying and starting app.py (not done by Terraform)"
-gcloud compute scp "$WORKDIR/app.py" "${INSTANCE}:~/app.py" \
-  --zone="$ZONE" --project="$GCP_PROJECT" \
-  --strict-host-key-checking=yes --quiet
-gcloud compute ssh "$INSTANCE" --zone="$ZONE" --project="$GCP_PROJECT" --quiet \
-  --strict-host-key-checking=yes \
-  --command='pkill -f "[p]ython3 app.py" 2>/dev/null || true; nohup python3 app.py >/tmp/flask-app.log 2>&1 &'
+deploy_ok=0
+for ((i = 1; i <= 5; i++)); do
+  if gcloud compute scp "$WORKDIR/app.py" "${INSTANCE}:~/app.py" \
+      --zone="$ZONE" --project="$GCP_PROJECT" \
+      --strict-host-key-checking=yes --quiet \
+    && gcloud compute ssh "$INSTANCE" \
+      --zone="$ZONE" --project="$GCP_PROJECT" \
+      --strict-host-key-checking=yes --quiet \
+      --command='sudo systemd-run --collect --unit="flask-app-verify-$(date +%s)" --property="WorkingDirectory=$HOME" /usr/bin/python3 "$HOME/app.py"'; then
+    deploy_ok=1
+    break
+  fi
+  sleep 5
+done
+[[ "$deploy_ok" -eq 1 ]] || die "could not deploy and start app.py after 5 attempts"
 
 log "curling $URL until Hello Cloud!"
 body=""
